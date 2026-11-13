@@ -1,3 +1,103 @@
+# Google Flow MCP
+
+An MCP server that lets an AI assistant (Claude Code, Antigravity, Codex, Cursor, or any MCP client) make video
+clips in **Google Flow** (flow.google.com), on your own computer, with Flow's own credits instead of the
+pay-per-use video API.
+
+This is a fork of [GTAI-1/flow-mcp](https://github.com/GTAI-1/flow-mcp). Everything upstream ships is still here
+and unchanged (the single-account server, the Flow Studio panel, narration, captions, assembly). The fork adds
+one thing: **a pool server that works across several Google accounts at once.**
+
+```
+AI assistant ──stdio──> flow-pool ──┬─> worker ──> Chrome profile A ──> Flow
+                                    ├─> worker ──> Chrome profile B ──> Flow
+                                    └─> worker ──> Chrome profile C ──> Flow
+```
+
+## What the pool server adds
+
+- **Five tools instead of twenty per account.** `flow_accounts`, `flow_generate`, `flow_wait`, `flow_retry`,
+  `flow_recover`. One server for every account, so the assistant's context is not filled with tool definitions.
+- **The assistant never picks an account.** It hands over scenes; the server reads each account's balance,
+  splits the scenes, and prefers a single account when everything fits so a character looks the same in every clip.
+- **Parallel generation.** One worker process per account, each in its own Chrome profile.
+- **A real spending guard.** Flow's own quote is read before every approval. A quote above the scene's cap, or
+  one that cannot be read, is refused and nothing is spent. `dry_run` shows the split and the cost first.
+- **Honest balances.** An open Flow tab shows the balance from when it loaded; the server reloads before reading
+  (about 13 s for 12 accounts) and reuses answers for 30 minutes.
+- **Nothing is paid for twice.** Run state lives on disk and workers are separate processes, so a restarted
+  client loses nothing. A clip that was made but not saved is marked `paid_not_saved`; `flow_retry` skips it and
+  `flow_recover` downloads it for free.
+- **Fast, readable failures.** When Flow's agent answers with something other than a price to approve, the
+  scene fails in seconds with what the agent said, and `flow_retry` moves it to another account.
+- **Files are never overwritten.** An existing clip of the same name is moved to `_replaced/`.
+- **Portable.** No environment variables to set; every result is short JSON in English, so it behaves the same in any MCP client.
+
+## Quick start (pool server)
+
+You need macOS or Windows, Node.js 22 or newer, and Google Chrome.
+
+```bash
+git clone https://github.com/mecitcagan-dev/google-flow-mcp.git
+cd google-flow-mcp
+npm install
+npm run build
+```
+
+Sign in once per account. Each account gets its own profile folder and its own port:
+
+```bash
+FLOW_MCP_HOME=~/.flow-mcp-a FLOW_MCP_CDP_PORT=9333 npm run login
+FLOW_MCP_HOME=~/.flow-mcp-b FLOW_MCP_CDP_PORT=9334 npm run login
+```
+
+In each window, sign in to Google and open (or create) a Flow project. Then register the server in your MCP client:
+
+```json
+{ "mcpServers": { "flow": { "command": "node", "args": ["/absolute/path/to/google-flow-mcp/dist/pool.js"] } } }
+```
+
+On first start the server lists the `~/.flow-mcp-<letter>` profiles it finds in `~/.flow-mcp-pool/accounts.json`.
+Add each account's `project_url` there, and set `"enabled": false` on any account you want left alone.
+[POOL.md](POOL.md) has the file format, the guarantees, and what has been checked against the real Flow.
+
+Then ask your assistant for clips, or call the tools yourself:
+
+```json
+{ "output_dir": "/Users/you/films/demo", "dry_run": true,
+  "scenes": [ { "name": "wave", "seconds": 4, "prompt": "A calm ocean wave rolls onto an empty beach at golden hour. Slow dolly forward. Photoreal, warm light. Audio: silent. Avoid: text, logo, watermark." } ] }
+```
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `flow_accounts` | Each account's credits and state (ready, busy, signed_out, no_project, disabled) and the total |
+| `flow_generate` | One clip per scene, split over accounts, saved as `<output_dir>/<file_prefix><name>.mp4`. Optional recurring `character` |
+| `flow_wait` | Status, file, credits and error per scene. Returns within 40 s; call until `finished` |
+| `flow_retry` | Redoes scenes that cost nothing, on other accounts first |
+| `flow_recover` | Downloads clips Flow already holds, without spending |
+
+Costs it plans with (Omni 1.1 Flash, 720p): 4 s = 7 credits, 6 s = 10, 8 s = 12, 10 s = 15.
+
+## Limits
+
+- It clicks Flow's real interface. When Google changes that interface, things break until the code is updated.
+- A character drawn in two different accounts is close but not identical; keep a character's scenes in one account.
+- Tested on macOS. Tests: `npm test`.
+
+## Before you use several accounts
+
+Read Google's terms yourself and decide. Google's account policies restrict creating or using multiple accounts
+to get around its limits, and its terms restrict automated access; Flow's own terms may add more. Whether a given
+setup breaks them is for you to judge, and the consequence of getting it wrong is losing the accounts. Use only
+accounts that are yours, and do not use this to resell or to evade a suspension. This project is not affiliated
+with or endorsed by Google, and it comes with no warranty.
+
+---
+
+*Below is the upstream README for the single-account server and Flow Studio.*
+
 # flow-mcp
 
 Drive **Google Flow** (flow.google.com) from Claude, Codex or any other MCP app, or from a local control
